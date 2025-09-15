@@ -93,28 +93,37 @@ std::vector<UriSequence> uri_from_uri_list(const std::vector<std::string> &uri_s
     auto sequences = sequences_from_entries(entries);
     for (const auto &seq : sequences) {
         if (seq.is_sequence()) {
-            // For sequences, use the first file as the URI and create a proper frame list
-            // Parse the frame range from the sequence
+            // For sequences, determine correct padding from the frame range
             FrameList frame_list(seq.frames_);
-            if (!frame_list.empty()) {
-                // Get the first frame number and construct the URI for the first file
-                auto frames = frame_list.frames();
-                int first_frame = frames.front();
-                std::string first_file_path = seq.name_;
-                
-                // Replace the format pattern with the actual first frame number
-                static const std::regex percent_match(R"(%0(\d+)d)", std::regex::optimize);
-                std::smatch match;
-                if (std::regex_search(first_file_path, match, percent_match)) {
-                    int pad_size = std::stoi(match[1].str());
-                    std::string frame_str = fmt::format("{:0{}d}", first_frame, pad_size);
-                    first_file_path = std::regex_replace(first_file_path, percent_match, frame_str);
-                }
-                
-                result.emplace_back(std::make_pair(
-                    posix_path_to_uri(first_file_path, true), 
-                    frame_list));
+            
+            // Calculate the required padding based on the highest frame number
+            int max_frame = 0;
+            auto frame_groups = frame_list.frame_groups();
+            for (const auto& group : frame_groups) {
+                max_frame = std::max(max_frame, group.end());
             }
+            
+            // Calculate required padding (number of digits)
+            int required_padding = std::to_string(max_frame).length();
+            
+            // Convert the pattern path from %XXd format to {:0XXd} format with correct padding
+            // e.g., "file.%00d.ext" becomes "file.{:04d}.ext=1003-1010" (if max frame is 1010)
+            static const std::regex percent_match(R"(%0\d+d)", std::regex::optimize);
+            std::string corrected_pattern = std::regex_replace(seq.name_, percent_match, 
+                "{:0" + std::to_string(required_padding) + "d}");
+            std::string cli_path_spec = corrected_pattern + "=" + seq.frames_;
+            
+            // Debug output to see what we're creating
+            spdlog::warn("Sequence name: {}", seq.name_);
+            spdlog::warn("Frame range: {}", seq.frames_);
+            spdlog::warn("Max frame: {}, Required padding: {}", max_frame, required_padding);
+            spdlog::warn("CLI path spec: {}", cli_path_spec);
+            
+            // Use parse_cli_posix_path to create the URI properly (same as CLI)
+            FrameList parsed_frame_list;
+            caf::uri pattern_uri = parse_cli_posix_path(cli_path_spec, parsed_frame_list, false);
+            
+            result.emplace_back(std::make_pair(pattern_uri, parsed_frame_list));
         } else {
             // Individual files
             result.emplace_back(std::make_pair(posix_path_to_uri(seq.name_, true), FrameList()));

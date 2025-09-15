@@ -1015,7 +1015,7 @@ QFuture<QList<QUuid>> SessionModel::handleUriListDropFuture(
                 }
 
                 if (target) {
-                    // First, try to detect sequences from the URI list
+                    // Use sequence detection to group sequential files
                     std::vector<std::string> uri_strings;
                     for (const auto &path : jdrop.at("text/uri-list")) {
                         uri_strings.push_back(path.get<std::string>());
@@ -1110,11 +1110,7 @@ QFuture<QList<QUuid>> SessionModel::handleUriListDropFuture(
                         "Playlist",
                         Uuid(),
                         false);
-                        
-                    // Get the default media rate from session
-                    auto media_rate = request_receive<FrameRate>(
-                        *sys, session_actor_, session::media_rate_atom_v);
-                    
+
                     for (const auto &sequence : sequences) {
                         const auto &uri = sequence.first;
                         const auto &frame_list = sequence.second;
