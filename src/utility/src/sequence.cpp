@@ -70,6 +70,59 @@ std::vector<UriSequence> uri_from_file(const std::string &path) {
     return uri_from_file_list(std::vector<std::string>({path}));
 }
 
+// Function to detect sequences from a list of URIs (for drag-and-drop)
+std::vector<UriSequence> uri_from_uri_list(const std::vector<std::string> &uri_strings) {
+    std::vector<std::string> paths;
+    paths.reserve(uri_strings.size());
+    
+    for (const auto &uri_string : uri_strings) {
+        auto uri = caf::make_uri(uri_string);
+        if (uri) {
+            paths.push_back(uri_to_posix_path(*uri));
+        }
+    }
+    
+    // Get sequences but create individual file URIs, not format URIs
+    std::vector<UriSequence> result;
+    std::vector<Entry> entries;
+    entries.reserve(paths.size());
+    for (const auto &i : paths) {
+        entries.emplace_back(Entry(i));
+    }
+
+    auto sequences = sequences_from_entries(entries);
+    for (const auto &seq : sequences) {
+        if (seq.is_sequence()) {
+            // For sequences, use the first file as the URI and create a proper frame list
+            // Parse the frame range from the sequence
+            FrameList frame_list(seq.frames_);
+            if (!frame_list.empty()) {
+                // Get the first frame number and construct the URI for the first file
+                auto frames = frame_list.frames();
+                int first_frame = frames.front();
+                std::string first_file_path = seq.name_;
+                
+                // Replace the format pattern with the actual first frame number
+                static const std::regex percent_match(R"(%0(\d+)d)", std::regex::optimize);
+                std::smatch match;
+                if (std::regex_search(first_file_path, match, percent_match)) {
+                    int pad_size = std::stoi(match[1].str());
+                    std::string frame_str = fmt::format("{:0{}d}", first_frame, pad_size);
+                    first_file_path = std::regex_replace(first_file_path, percent_match, frame_str);
+                }
+                
+                result.emplace_back(std::make_pair(
+                    posix_path_to_uri(first_file_path, true), 
+                    frame_list));
+            }
+        } else {
+            // Individual files
+            result.emplace_back(std::make_pair(posix_path_to_uri(seq.name_, true), FrameList()));
+        }
+    }
+    
+    return result;
+}
 
 Entry::Entry(const std::string path) : name_(std::move(path)) {
     std::memset(&stat_, 0, sizeof stat_);

@@ -30,6 +30,7 @@ namespace utility {
 
     std::vector<UriSequence> uri_from_file_list(const std::vector<std::string> &paths);
     std::vector<UriSequence> uri_from_file(const std::string &path);
+    std::vector<UriSequence> uri_from_uri_list(const std::vector<std::string> &uri_strings);
 
     struct Entry {
         struct stat stat_;
