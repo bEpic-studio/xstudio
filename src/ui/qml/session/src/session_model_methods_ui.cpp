@@ -10,6 +10,7 @@
 #include "xstudio/ui/qml/job_control_ui.hpp"
 #include "xstudio/ui/qml/session_model_ui.hpp"
 #include "xstudio/utility/notification_handler.hpp"
+#include "xstudio/utility/sequence.hpp"
 
 CAF_PUSH_WARNINGS
 #include <QtConcurrent>
@@ -1014,36 +1015,46 @@ QFuture<QList<QUuid>> SessionModel::handleUriListDropFuture(
                 }
 
                 if (target) {
+                    // First, try to detect sequences from the URI list
+                    std::vector<std::string> uri_strings;
                     for (const auto &path : jdrop.at("text/uri-list")) {
-                        auto path_string = path.get<std::string>();
-                        auto uri         = caf::make_uri(url_clean(path_string));
-
-                        if (uri) {
-                            // uri maybe timeline...
-                            // hacky...
-                            if (is_timeline_supported(*uri)) {
-                                // spdlog::warn("LOAD TIMELINE {}", to_string(*uri));
-                                new_media.push_back(request_receive<UuidActor>(
-                                    *sys, target, session::import_atom_v, *uri, before, true));
-                            } else {
-                                auto new_media_tmp = request_receive<UuidActorVector>(
-                                    *sys,
-                                    target,
-                                    playlist::add_media_atom_v,
-                                    *uri,
-                                    true,
-                                    before);
-
-                                new_media.insert(
-                                    new_media.end(),
-                                    new_media_tmp.begin(),
-                                    new_media_tmp.end());
-                            }
+                        uri_strings.push_back(path.get<std::string>());
+                    }
+                    
+                    // Get the default media rate from session
+                    auto media_rate = request_receive<FrameRate>(
+                        *sys, session_actor_, session::media_rate_atom_v);
+                    
+                    // Use sequence detection on the URIs
+                    auto sequences = utility::uri_from_uri_list(uri_strings);
+                    
+                    for (const auto &sequence : sequences) {
+                        const auto &uri = sequence.first;
+                        const auto &frame_list = sequence.second;
+                        
+                        if (is_timeline_supported(uri)) {
+                            new_media.push_back(request_receive<UuidActor>(
+                                *sys, target, session::import_atom_v, uri, before, true));
                         } else {
-                            spdlog::warn(
-                                "{} Invalid URI {}",
-                                __PRETTY_FUNCTION__,
-                                path.get<std::string>());
+                            // Get the base name for the media
+                            auto path = fs::path(uri_to_posix_path(uri));
+                            auto name = path.stem().string();
+                            const auto dotpos = name.find(".");
+                            if (dotpos != std::string::npos) {
+                                name = name.substr(0, dotpos);
+                            }
+                            
+                            // Load as media with frame list (sequence) or single file using the correct handler
+                            auto new_media_item = request_receive<UuidActor>(
+                                *sys,
+                                target,
+                                playlist::add_media_atom_v,
+                                name,
+                                uri,
+                                frame_list,
+                                before);
+
+                            new_media.push_back(new_media_item);
                         }
                     }
 
@@ -1081,14 +1092,59 @@ QFuture<QList<QUuid>> SessionModel::handleUriListDropFuture(
                     }
                 }
             } else {
-                // create playlist ?
-                std::vector<caf::uri> uris;
+                // create playlist and detect sequences
+                std::vector<std::string> uri_strings;
                 for (const auto &path : jdrop.at("text/uri-list")) {
-                    auto uri = caf::make_uri(url_clean(path));
-                    if (uri)
-                        uris.emplace_back(*uri);
+                    uri_strings.push_back(path.get<std::string>());
                 }
-                anon_mail(session::load_uris_atom_v, uris, false, true).send(session_actor_);
+                
+                // Use sequence detection on the URIs  
+                auto sequences = utility::uri_from_uri_list(uri_strings);
+                
+                // If we detected sequences, create playlist and add them
+                if (!sequences.empty()) {
+                    auto ua = request_receive<UuidActor>(
+                        *sys,
+                        session_actor_,
+                        session::add_playlist_atom_v,
+                        "Playlist",
+                        Uuid(),
+                        false);
+                        
+                    // Get the default media rate from session
+                    auto media_rate = request_receive<FrameRate>(
+                        *sys, session_actor_, session::media_rate_atom_v);
+                    
+                    for (const auto &sequence : sequences) {
+                        const auto &uri = sequence.first;
+                        const auto &frame_list = sequence.second;
+                        
+                        // Get the base name for the media
+                        auto path = fs::path(uri_to_posix_path(uri));
+                        auto name = path.stem().string();
+                        const auto dotpos = name.find(".");
+                        if (dotpos != std::string::npos) {
+                            name = name.substr(0, dotpos);
+                        }
+                        
+                        anon_mail(
+                            playlist::add_media_atom_v,
+                            name,
+                            uri,
+                            frame_list,
+                            Uuid())
+                            .send(ua.actor());
+                    }
+                } else {
+                    // Fallback to original behavior
+                    std::vector<caf::uri> uris;
+                    for (const auto &path : jdrop.at("text/uri-list")) {
+                        auto uri = caf::make_uri(url_clean(path));
+                        if (uri)
+                            uris.emplace_back(*uri);
+                    }
+                    anon_mail(session::load_uris_atom_v, uris, false, true).send(session_actor_);
+                }
             }
 
             for (const auto &i : new_media)
