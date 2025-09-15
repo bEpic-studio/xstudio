@@ -1,0 +1,119 @@
+name: Build macOS
+
+on:
+  push:
+    branches: [ci/macos]
+  # pull_request:
+  #   branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  QT_VERSION: "6.5.3"
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Install Homebrew dependencies
+      run: |
+        brew update
+        brew install cmake pkg-config nasm autoconf autoconf-archive
+
+    - name: Install Qt6
+      run: |
+        # Install Qt using aqtinstall
+        pip3 install aqtinstall
+        aqt install-qt mac desktop ${{ env.QT_VERSION }} clang_64 \
+            -m qtmultimedia qtnetworkauth qtquick3d qtshadertools qtwebengine
+        
+        # Add Qt to PATH
+        echo "$(pwd)/Qt/${{ env.QT_VERSION }}/macos/bin" >> $GITHUB_PATH
+
+    - name: Setup VCPKG
+      run: |
+        # Clone VCPKG in parent directory as expected by CMakePresets.json
+        cd ..
+        git clone https://github.com/microsoft/vcpkg.git
+        ./vcpkg/bootstrap-vcpkg.sh
+
+    - name: Initialize OpenTimelineIO submodule
+      run: |
+        git submodule init
+        git submodule update
+        git apply cmake/otio_patch.diff
+
+    - name: Update CMakePresets.json for CI
+      run: |
+        # Update Qt6_DIR path for CI environment
+        sed -i '' "s|/Users/tedwaine/Qt6/6.5.3/macos/lib/cmake/Qt6|$(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/Qt6|g" CMakePresets.json
+
+    - name: Configure with CMake (ARM64)
+      run: |
+        # Use the MacOSRelease preset for ARM64 (GitHub runners are ARM64)
+        cmake -B build --preset MacOSRelease
+
+    - name: Build xSTUDIO
+      run: |
+        cmake --build build --parallel $(sysctl -n hw.ncpu) --target install
+
+    - name: Create DMG installer
+      run: |
+        cd build
+        
+        # Check if xSTUDIO.app was created
+        if [ -d "xSTUDIO.app" ]; then
+          echo "Found xSTUDIO.app, creating DMG..."
+          
+          # Create a temporary directory for DMG contents
+          mkdir -p dmg_temp
+          cp -R xSTUDIO.app dmg_temp/
+          
+          # Create symbolic link to Applications
+          ln -s /Applications dmg_temp/Applications
+          
+          # Create DMG
+          hdiutil create -volname "xSTUDIO" \
+                         -srcfolder dmg_temp \
+                         -ov -format UDZO \
+                         "xSTUDIO-macOS-${{ github.sha }}.dmg"
+          
+          echo "DMG created successfully"
+          ls -la xSTUDIO-macOS-*.dmg
+        else
+          echo "xSTUDIO.app not found in build directory"
+          echo "Build directory contents:"
+          ls -la
+          exit 1
+        fi
+
+    - name: Upload DMG artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: xSTUDIO-macOS-installer
+        path: build/xSTUDIO-macOS-*.dmg
+        retention-days: 30
+
+    - name: Upload App Bundle artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: xSTUDIO-macOS-app
+        path: build/xSTUDIO.app/
+        retention-days: 30
+
+    - name: Upload build logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs-macos
+        path: |
+          build/CMakeFiles/CMakeOutput.log
+          build/CMakeFiles/CMakeError.log
+          build/vcpkg-bootstrap.log
+        retention-days: 7
