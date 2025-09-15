@@ -21,6 +21,11 @@ jobs:
         submodules: recursive
         fetch-depth: 0
 
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+
     - name: Install Homebrew dependencies
       run: |
         brew update
@@ -29,7 +34,7 @@ jobs:
     - name: Install Qt6
       run: |
         # Install Qt using aqtinstall
-        pip3 install aqtinstall
+        pip install aqtinstall
         aqt install-qt mac desktop ${{ env.QT_VERSION }} clang_64 \
             -m qtmultimedia qtnetworkauth qtquick3d qtshadertools qtwebengine
         
