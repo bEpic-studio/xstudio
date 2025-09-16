@@ -205,80 +205,71 @@ jobs:
         # Find all required dynamic libraries
         echo "=== Bundling dynamic libraries ==="
         
-        # Copy vcpkg libraries
-        VCPKG_LIB_DIR="../vcpkg_installed/arm-osx/lib"
-        if [ -d "$VCPKG_LIB_DIR" ]; then
-          echo "Copying vcpkg libraries from: $VCPKG_LIB_DIR"
-          find "$VCPKG_LIB_DIR" -name "*.dylib" -exec cp {} xSTUDIO.app/Contents/Frameworks/ \;
-        fi
+        # First, let's find where the vcpkg libraries actually are
+        echo "=== Searching for vcpkg libraries ==="
+        find .. -name "libspdlog*.dylib" -type f 2>/dev/null || echo "No spdlog libraries found"
+        find .. -name "*.dylib" -path "*/vcpkg*" -type f 2>/dev/null | head -10
+        
+        # Check multiple possible vcpkg library locations
+        VCPKG_POSSIBLE_DIRS=(
+          "../vcpkg_installed/arm-osx/lib"
+          "../vcpkg_installed/arm64-osx/lib"
+          "../vcpkg/installed/arm-osx/lib"
+          "../vcpkg/installed/arm64-osx/lib"
+          "vcpkg_installed/arm-osx/lib"
+          "vcpkg_installed/arm64-osx/lib"
+        )
+        
+        for dir in "${VCPKG_POSSIBLE_DIRS[@]}"; do
+          if [ -d "$dir" ]; then
+            echo "Found vcpkg lib directory: $dir"
+            echo "Contents:"
+            ls -la "$dir" | head -10
+            
+            echo "Copying libraries from: $dir"
+            find "$dir" -name "*.dylib" -exec cp -v {} xSTUDIO.app/Contents/Frameworks/ \;
+            break
+          fi
+        done
+        
+        # Also check for libraries that might be in the build directory itself
+        echo "=== Checking build directory for libraries ==="
+        find . -name "*.dylib" -type f 2>/dev/null | while read lib; do
+          echo "Found library in build: $lib"
+          cp -v "$lib" xSTUDIO.app/Contents/Frameworks/
+        done
         
         # Copy Qt libraries that might be needed
         QT_LIB_DIR="../Qt/${{ env.QT_VERSION }}/macos/lib"
         if [ -d "$QT_LIB_DIR" ]; then
-          echo "Copying Qt libraries from: $QT_LIB_DIR"
-          find "$QT_LIB_DIR" -name "*.dylib" -exec cp {} xSTUDIO.app/Contents/Frameworks/ \;
+          echo "Copying essential Qt libraries from: $QT_LIB_DIR"
+          # Only copy Qt libraries that are likely to be needed
+          find "$QT_LIB_DIR" -name "libQt6*.dylib" -exec cp -v {} xSTUDIO.app/Contents/Frameworks/ \;
         fi
         
         # List what we copied
         echo "=== Bundled libraries ==="
         ls -la xSTUDIO.app/Contents/Frameworks/
         
-        # Fix library install names using install_name_tool
-        echo "=== Fixing library install names ==="
-        
-        # Fix the main executable
-        MAIN_EXEC="xSTUDIO.app/Contents/MacOS/xstudio.bin"
-        if [ -f "$MAIN_EXEC" ]; then
-          echo "Fixing install names for: $MAIN_EXEC"
-          
-          # Get all library dependencies
-          otool -L "$MAIN_EXEC" | grep -E "\.(dylib|framework)" | while read line; do
-            lib_path=$(echo "$line" | awk '{print $1}')
-            lib_name=$(basename "$lib_path")
-            
-            # Skip system libraries
-            if [[ "$lib_path" == /System/* ]] || [[ "$lib_path" == /usr/lib/* ]]; then
-              continue
-            fi
-            
-            # Update the install name to point to bundled location
-            if [ -f "xSTUDIO.app/Contents/Frameworks/$lib_name" ]; then
-              echo "  Updating $lib_name"
-              install_name_tool -change "$lib_path" "@rpath/$lib_name" "$MAIN_EXEC" || true
-            fi
-          done
-          
-          # Add rpath to Frameworks
-          install_name_tool -add_rpath "@executable_path/../Frameworks" "$MAIN_EXEC" || true
+        # Verify we have the required spdlog library
+        if [ -f "xSTUDIO.app/Contents/Frameworks/libspdlog.1.15.3.dylib" ]; then
+          echo "✓ libspdlog.1.15.3.dylib successfully bundled"
+        else
+          echo "✗ libspdlog.1.15.3.dylib NOT found in bundle"
+          echo "Searching for any spdlog libraries:"
+          find xSTUDIO.app/Contents/Frameworks/ -name "*spdlog*" || echo "No spdlog libraries in bundle"
         fi
         
-        # Fix library dependencies within bundled libraries
-        for lib in xSTUDIO.app/Contents/Frameworks/*.dylib; do
-          if [ -f "$lib" ]; then
-            echo "Fixing dependencies for: $(basename $lib)"
-            
-            # Fix the library's own install name
-            lib_name=$(basename "$lib")
-            install_name_tool -id "@rpath/$lib_name" "$lib" || true
-            
-            # Fix its dependencies
-            otool -L "$lib" | grep -E "\.(dylib|framework)" | while read line; do
-              dep_path=$(echo "$line" | awk '{print $1}')
-              dep_name=$(basename "$dep_path")
-              
-              # Skip system libraries and self-references
-              if [[ "$dep_path" == /System/* ]] || [[ "$dep_path" == /usr/lib/* ]] || [[ "$dep_name" == "$lib_name" ]]; then
-                continue
-              fi
-              
-              # Update dependency path if the library is bundled
-              if [ -f "xSTUDIO.app/Contents/Frameworks/$dep_name" ]; then
-                echo "    Updating dependency $dep_name"
-                install_name_tool -change "$dep_path" "@rpath/$dep_name" "$lib" || true
-              fi
-            done
-          fi
-        done
+        # Add rpath to the main executable
+        MAIN_EXEC="xSTUDIO.app/Contents/MacOS/xstudio.bin"
+        if [ -f "$MAIN_EXEC" ]; then
+          echo "=== Adding rpath to main executable ==="
+          install_name_tool -add_rpath "@executable_path/../Frameworks" "$MAIN_EXEC" 2>/dev/null || echo "rpath may already exist"
+          
+          # Show current rpaths
+          echo "Current rpaths:"
+          otool -l "$MAIN_EXEC" | grep -A2 LC_RPATH || echo "No rpaths found"
+        fi
         
         echo "=== Library bundling complete ==="
 
