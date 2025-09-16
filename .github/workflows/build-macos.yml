@@ -55,8 +55,31 @@ jobs:
       run: |
         # Install Qt using aqtinstall
         pip install aqtinstall
+        
+        # Debug aqt version and available architectures
+        echo "=== AQT Debug Info ==="
+        aqt version
+        aqt list-qt mac desktop
+        
+        # Install Qt with explicit output directory
         aqt install-qt mac desktop ${{ env.QT_VERSION }} clang_64 \
+            --outputdir ./Qt \
             -m qtmultimedia qtnetworkauth qtquick3d qtshadertools qtwebengine
+        
+        # Debug Qt installation
+        echo "=== Qt Installation Debug ==="
+        echo "Current directory: $(pwd)"
+        echo "Qt directory contents:"
+        ls -la Qt/ || echo "Qt directory not found"
+        
+        if [ -d "Qt/${{ env.QT_VERSION }}" ]; then
+          echo "Qt version directory found:"
+          ls -la Qt/${{ env.QT_VERSION }}/
+        else
+          echo "Qt version directory not found, searching for any Qt installation:"
+          find Qt -name "Qt6Config.cmake" 2>/dev/null || echo "No Qt6Config.cmake found anywhere"
+          find Qt -type d -name "*cmake*" 2>/dev/null || echo "No cmake directories found"
+        fi
         
         # Add Qt to PATH
         echo "$(pwd)/Qt/${{ env.QT_VERSION }}/macos/bin" >> $GITHUB_PATH
