@@ -2,9 +2,9 @@ name: Build macOS
 
 on:
   push:
-    branches: [ci/macos]
-  # pull_request:
-  #   branches: [ main, develop ]
+    branches: [develop, ci/macos]
+  pull_request:
+    branches: [main, develop]
   workflow_dispatch:
 
 env:
@@ -26,10 +26,21 @@ jobs:
       with:
         python-version: '3.11'
 
+    - name: Install specific CMake version
+      run: |
+        # Download and install CMake 3.28.3 (last version that supports old policies)
+        curl -L -o cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-macos-universal.tar.gz
+        tar -xzf cmake.tar.gz
+        sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/bin/* /usr/local/bin/
+        sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/share/cmake* /usr/local/share/
+        
+        # Verify CMake version
+        cmake --version
+
     - name: Install Homebrew dependencies
       run: |
         brew update
-        brew install cmake pkg-config nasm autoconf autoconf-archive
+        brew install pkg-config nasm autoconf autoconf-archive
 
     - name: Install Qt6
       run: |
