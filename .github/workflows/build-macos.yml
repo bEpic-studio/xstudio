@@ -26,14 +26,62 @@ jobs:
       with:
         python-version: '3.11'
 
+    - name: Cache vcpkg dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ../vcpkg
+          ~/.cache/vcpkg
+        key: vcpkg-macos-${{ hashFiles('vcpkg.json', 'CMakePresets.json') }}-v2
+        restore-keys: |
+          vcpkg-macos-v2
+
+    - name: Cache Qt installation
+      uses: actions/cache@v3
+      with:
+        path: Qt
+        key: qt-${{ env.QT_VERSION }}-macos-clang64-v1
+        restore-keys: |
+          qt-${{ env.QT_VERSION }}-macos
+
+    - name: Cache CMake installation
+      uses: actions/cache@v3
+      with:
+        path: |
+          /usr/local/bin/cmake
+          /usr/local/bin/ctest
+          /usr/local/bin/cpack
+          /usr/local/share/cmake*
+        key: cmake-3.28.3-macos-v1
+        restore-keys: |
+          cmake-3.28.3-macos
+
+    - name: Cache Homebrew packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          /usr/local/Cellar
+          /usr/local/Homebrew
+          /opt/homebrew/Cellar
+          /opt/homebrew/var/homebrew
+        key: homebrew-macos-${{ runner.os }}-autotools-v1
+        restore-keys: |
+          homebrew-macos-${{ runner.os }}
+
     - name: Install specific CMake version
       run: |
-        # Download and install CMake 3.28.3 (last version that supports old policies)
-        curl -L -o cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-macos-universal.tar.gz
-        tar -xzf cmake.tar.gz
-        sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/bin/* /usr/local/bin/
-        sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/share/cmake* /usr/local/share/
-        rm -rf cmake.tar.gz cmake-3.28.3-macos-universal
+        # Check if CMake 3.28.3 is already cached
+        if command -v cmake &> /dev/null && cmake --version | grep -q "3.28.3"; then
+          echo "CMake 3.28.3 already installed (cached)"
+        else
+          echo "Installing CMake 3.28.3..."
+          # Download and install CMake 3.28.3 (last version that supports old policies)
+          curl -L -o cmake.tar.gz https://github.com/Kitware/CMake/releases/download/v3.28.3/cmake-3.28.3-macos-universal.tar.gz
+          tar -xzf cmake.tar.gz
+          sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/bin/* /usr/local/bin/
+          sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/share/cmake* /usr/local/share/
+          rm -rf cmake.tar.gz cmake-3.28.3-macos-universal
+        fi
         
         # Make sure our CMake is first in PATH
         echo "/usr/local/bin" >> $GITHUB_PATH
@@ -44,9 +92,22 @@ jobs:
 
     - name: Install Homebrew dependencies
       run: |
-        brew update
-        # Install complete autotools chain for Python3 build
-        brew install pkg-config nasm autoconf autoconf-archive automake libtool gettext
+        # Check if essential tools are already installed
+        MISSING_TOOLS=()
+        for tool in pkg-config nasm autoconf automake libtool; do
+          if ! command -v $tool &> /dev/null; then
+            MISSING_TOOLS+=($tool)
+          fi
+        done
+        
+        if [ ${#MISSING_TOOLS[@]} -eq 0 ]; then
+          echo "All Homebrew dependencies already installed (cached)"
+        else
+          echo "Installing missing Homebrew dependencies: ${MISSING_TOOLS[*]}"
+          brew update
+          # Install complete autotools chain for Python3 build
+          brew install pkg-config nasm autoconf autoconf-archive automake libtool gettext
+        fi
         
         # Make sure gettext is in PATH (sometimes needed for autoreconf)
         echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
@@ -86,10 +147,17 @@ jobs:
 
     - name: Setup VCPKG
       run: |
-        # Clone VCPKG in parent directory as expected by CMakePresets.json
-        cd ..
-        git clone https://github.com/microsoft/vcpkg.git
-        ./vcpkg/bootstrap-vcpkg.sh
+        # Check if VCPKG is already cached
+        if [ -d "../vcpkg" ] && [ -x "../vcpkg/vcpkg" ]; then
+          echo "VCPKG already cached and ready"
+        else
+          echo "Cloning and bootstrapping VCPKG..."
+          # Clone VCPKG in parent directory as expected by CMakePresets.json
+          cd ..
+          git clone https://github.com/microsoft/vcpkg.git
+          ./vcpkg/bootstrap-vcpkg.sh
+          cd xstudio
+        fi
 
     - name: Create x265 CMake policy fix overlay
       run: |
@@ -273,6 +341,18 @@ jobs:
         
         echo "=== Library bundling complete ==="
 
+    - name: Cache vcpkg built packages
+      uses: actions/cache@v3
+      with:
+        path: |
+          ../vcpkg/installed
+          ../vcpkg/packages
+          build/vcpkg_installed
+        key: vcpkg-built-macos-${{ hashFiles('vcpkg.json') }}-${{ hashFiles('../vcpkg/.git/HEAD') }}-v1
+        restore-keys: |
+          vcpkg-built-macos-${{ hashFiles('vcpkg.json') }}-v1
+          vcpkg-built-macos-v1
+
     - name: Create DMG installer
       run: |
         cd build
@@ -329,6 +409,17 @@ jobs:
         name: xSTUDIO-macOS-app
         path: build/xSTUDIO.app/
         retention-days: 30
+
+    - name: Upload vcpkg dependencies artifact
+      if: success()
+      uses: actions/upload-artifact@v4
+      with:
+        name: vcpkg-dependencies-macos-${{ github.sha }}
+        path: |
+          ../vcpkg/installed
+          build/vcpkg_installed
+        retention-days: 7
+        compression-level: 6
 
     - name: Upload build logs on failure
       if: failure()
