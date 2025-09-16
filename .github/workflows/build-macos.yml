@@ -111,7 +111,24 @@ jobs:
     - name: Update CMakePresets.json for CI
       run: |
         # Update Qt6_DIR path for CI environment
-        sed -i '' "s|/Users/tedwaine/Qt6/6.5.3/macos/lib/cmake/Qt6|$(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/Qt6|g" CMakePresets.json
+        QT_CMAKE_PATH="$(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/Qt6"
+        echo "Qt CMAKE path: $QT_CMAKE_PATH"
+        
+        # Verify Qt installation exists
+        if [ ! -d "$QT_CMAKE_PATH" ]; then
+          echo "ERROR: Qt CMAKE path not found: $QT_CMAKE_PATH"
+          echo "Available Qt directories:"
+          find $(pwd)/Qt -name "Qt6Config.cmake" 2>/dev/null || echo "No Qt6Config.cmake found"
+          ls -la $(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/ 2>/dev/null || echo "CMAKE dir not found"
+          exit 1
+        fi
+        
+        # Update the preset
+        sed -i '' "s|/Users/tedwaine/Qt6/6.5.3/macos/lib/cmake/Qt6|$QT_CMAKE_PATH|g" CMakePresets.json
+        
+        # Verify the change
+        echo "=== Updated CMakePresets.json ==="
+        grep -A 5 -B 5 "Qt6" CMakePresets.json
 
     - name: Configure with CMake (ARM64)
       run: |
@@ -119,7 +136,8 @@ jobs:
         echo "=== Environment Debug ==="
         echo "CMake version: $(cmake --version)"
         echo "CMake path: $(which cmake)"
-        echo "Qt path: $(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/Qt6"
+        QT_CMAKE_PATH="$(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/Qt6"
+        echo "Qt CMAKE path: $QT_CMAKE_PATH"
         echo "VCPKG path: $(pwd)/../vcpkg"
         echo "Autotools versions:"
         echo "  autoconf: $(autoconf --version | head -1)"
@@ -127,13 +145,28 @@ jobs:
         echo "  libtool: $(libtool --version | head -1)"
         echo "  autoreconf: $(autoreconf --version | head -1)"
         
+        # Verify Qt installation
+        echo "=== Qt Installation Check ==="
+        if [ -f "$QT_CMAKE_PATH/Qt6Config.cmake" ]; then
+          echo "✓ Qt6Config.cmake found at: $QT_CMAKE_PATH/Qt6Config.cmake"
+        else
+          echo "✗ Qt6Config.cmake NOT found at: $QT_CMAKE_PATH/Qt6Config.cmake"
+          echo "Searching for Qt6Config.cmake:"
+          find $(pwd)/Qt -name "Qt6Config.cmake" 2>/dev/null || echo "No Qt6Config.cmake found anywhere"
+        fi
+        
         # Set environment variables for vcpkg and CMake
         export VCPKG_ROOT="$(pwd)/../vcpkg"
         export CMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
         export VCPKG_OVERLAY_PORTS="$(pwd)/vcpkg-overlays"
+        export Qt6_DIR="$QT_CMAKE_PATH"
+        export CMAKE_PREFIX_PATH="$QT_CMAKE_PATH:$(pwd)/Qt/${{ env.QT_VERSION }}/macos"
         
         # Use the MacOSRelease preset for ARM64 (GitHub runners are ARM64)
-        cmake -B build --preset MacOSRelease -DVCPKG_OVERLAY_PORTS="$(pwd)/vcpkg-overlays"
+        cmake -B build --preset MacOSRelease \
+          -DVCPKG_OVERLAY_PORTS="$(pwd)/vcpkg-overlays" \
+          -DQt6_DIR="$QT_CMAKE_PATH" \
+          -DCMAKE_PREFIX_PATH="$QT_CMAKE_PATH;$(pwd)/Qt/${{ env.QT_VERSION }}/macos"
 
     - name: Build xSTUDIO
       run: |
