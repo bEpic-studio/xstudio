@@ -195,9 +195,109 @@ jobs:
       run: |
         cmake --build build --parallel $(sysctl -n hw.ncpu) --target install
 
+    - name: Bundle dynamic libraries into app
+      run: |
+        cd build
+        
+        # Create Frameworks directory if it doesn't exist
+        mkdir -p xSTUDIO.app/Contents/Frameworks
+        
+        # Find all required dynamic libraries
+        echo "=== Bundling dynamic libraries ==="
+        
+        # Copy vcpkg libraries
+        VCPKG_LIB_DIR="../vcpkg_installed/arm-osx/lib"
+        if [ -d "$VCPKG_LIB_DIR" ]; then
+          echo "Copying vcpkg libraries from: $VCPKG_LIB_DIR"
+          find "$VCPKG_LIB_DIR" -name "*.dylib" -exec cp {} xSTUDIO.app/Contents/Frameworks/ \;
+        fi
+        
+        # Copy Qt libraries that might be needed
+        QT_LIB_DIR="../Qt/${{ env.QT_VERSION }}/macos/lib"
+        if [ -d "$QT_LIB_DIR" ]; then
+          echo "Copying Qt libraries from: $QT_LIB_DIR"
+          find "$QT_LIB_DIR" -name "*.dylib" -exec cp {} xSTUDIO.app/Contents/Frameworks/ \;
+        fi
+        
+        # List what we copied
+        echo "=== Bundled libraries ==="
+        ls -la xSTUDIO.app/Contents/Frameworks/
+        
+        # Fix library install names using install_name_tool
+        echo "=== Fixing library install names ==="
+        
+        # Fix the main executable
+        MAIN_EXEC="xSTUDIO.app/Contents/MacOS/xstudio.bin"
+        if [ -f "$MAIN_EXEC" ]; then
+          echo "Fixing install names for: $MAIN_EXEC"
+          
+          # Get all library dependencies
+          otool -L "$MAIN_EXEC" | grep -E "\.(dylib|framework)" | while read line; do
+            lib_path=$(echo "$line" | awk '{print $1}')
+            lib_name=$(basename "$lib_path")
+            
+            # Skip system libraries
+            if [[ "$lib_path" == /System/* ]] || [[ "$lib_path" == /usr/lib/* ]]; then
+              continue
+            fi
+            
+            # Update the install name to point to bundled location
+            if [ -f "xSTUDIO.app/Contents/Frameworks/$lib_name" ]; then
+              echo "  Updating $lib_name"
+              install_name_tool -change "$lib_path" "@rpath/$lib_name" "$MAIN_EXEC" || true
+            fi
+          done
+          
+          # Add rpath to Frameworks
+          install_name_tool -add_rpath "@executable_path/../Frameworks" "$MAIN_EXEC" || true
+        fi
+        
+        # Fix library dependencies within bundled libraries
+        for lib in xSTUDIO.app/Contents/Frameworks/*.dylib; do
+          if [ -f "$lib" ]; then
+            echo "Fixing dependencies for: $(basename $lib)"
+            
+            # Fix the library's own install name
+            lib_name=$(basename "$lib")
+            install_name_tool -id "@rpath/$lib_name" "$lib" || true
+            
+            # Fix its dependencies
+            otool -L "$lib" | grep -E "\.(dylib|framework)" | while read line; do
+              dep_path=$(echo "$line" | awk '{print $1}')
+              dep_name=$(basename "$dep_path")
+              
+              # Skip system libraries and self-references
+              if [[ "$dep_path" == /System/* ]] || [[ "$dep_path" == /usr/lib/* ]] || [[ "$dep_name" == "$lib_name" ]]; then
+                continue
+              fi
+              
+              # Update dependency path if the library is bundled
+              if [ -f "xSTUDIO.app/Contents/Frameworks/$dep_name" ]; then
+                echo "    Updating dependency $dep_name"
+                install_name_tool -change "$dep_path" "@rpath/$dep_name" "$lib" || true
+              fi
+            done
+          fi
+        done
+        
+        echo "=== Library bundling complete ==="
+
     - name: Create DMG installer
       run: |
         cd build
+        
+        # Verify library bundling before creating DMG
+        echo "=== Pre-DMG verification ==="
+        if [ -f "xSTUDIO.app/Contents/MacOS/xstudio.bin" ]; then
+          echo "Main executable dependencies:"
+          otool -L xSTUDIO.app/Contents/MacOS/xstudio.bin
+          echo ""
+          echo "Main executable rpaths:"
+          otool -l xSTUDIO.app/Contents/MacOS/xstudio.bin | grep -A2 LC_RPATH || echo "No rpaths found"
+        fi
+        
+        echo "Bundled frameworks:"
+        ls -la xSTUDIO.app/Contents/Frameworks/ || echo "No Frameworks directory"
         
         # Check if xSTUDIO.app was created
         if [ -d "xSTUDIO.app" ]; then
