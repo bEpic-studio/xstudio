@@ -45,7 +45,11 @@ jobs:
     - name: Install Homebrew dependencies
       run: |
         brew update
-        brew install pkg-config nasm autoconf autoconf-archive
+        # Install complete autotools chain for Python3 build
+        brew install pkg-config nasm autoconf autoconf-archive automake libtool gettext
+        
+        # Make sure gettext is in PATH (sometimes needed for autoreconf)
+        echo "$(brew --prefix gettext)/bin" >> $GITHUB_PATH
 
     - name: Install Qt6
       run: |
@@ -117,6 +121,11 @@ jobs:
         echo "CMake path: $(which cmake)"
         echo "Qt path: $(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/Qt6"
         echo "VCPKG path: $(pwd)/../vcpkg"
+        echo "Autotools versions:"
+        echo "  autoconf: $(autoconf --version | head -1)"
+        echo "  automake: $(automake --version | head -1)"
+        echo "  libtool: $(libtool --version | head -1)"
+        echo "  autoreconf: $(autoreconf --version | head -1)"
         
         # Set environment variables for vcpkg and CMake
         export VCPKG_ROOT="$(pwd)/../vcpkg"
@@ -185,6 +194,8 @@ jobs:
           build/vcpkg-bootstrap.log
           ../vcpkg/buildtrees/x265/config-*.log
           ../vcpkg/buildtrees/x265/*.log
+          ../vcpkg/buildtrees/python3/autoconf-*.log
+          ../vcpkg/buildtrees/python3/*.log
           ../vcpkg/buildtrees/*/config-*.log
           vcpkg-overlays/
         retention-days: 7
