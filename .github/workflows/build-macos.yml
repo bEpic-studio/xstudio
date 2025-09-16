@@ -33,9 +33,14 @@ jobs:
         tar -xzf cmake.tar.gz
         sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/bin/* /usr/local/bin/
         sudo cp -R cmake-3.28.3-macos-universal/CMake.app/Contents/share/cmake* /usr/local/share/
+        rm -rf cmake.tar.gz cmake-3.28.3-macos-universal
+        
+        # Make sure our CMake is first in PATH
+        echo "/usr/local/bin" >> $GITHUB_PATH
         
         # Verify CMake version
         cmake --version
+        which cmake
 
     - name: Install Homebrew dependencies
       run: |
@@ -59,6 +64,40 @@ jobs:
         git clone https://github.com/microsoft/vcpkg.git
         ./vcpkg/bootstrap-vcpkg.sh
 
+    - name: Create x265 CMake policy fix overlay
+      run: |
+        # Create overlay directory for x265 port
+        mkdir -p vcpkg-overlays/x265
+        
+        # Copy the original x265 port files
+        cp -r ../vcpkg/ports/x265/* vcpkg-overlays/x265/
+        
+        # Create a patch to fix CMake policies
+        cat > vcpkg-overlays/x265/fix-cmake-policies.patch << 'EOF'
+        --- a/source/cmake/version.cmake
+        +++ b/source/cmake/version.cmake
+        @@ -1,8 +1,12 @@
+         # cmake policy
+        -cmake_policy(SET CMP0025 OLD) # Clang just pretends to be GCC
+        -cmake_policy(SET CMP0054 OLD) # Only interpret if() arguments as variables or keywords when unquoted.
+        +if(POLICY CMP0025)
+        +    cmake_policy(SET CMP0025 OLD) # Clang just pretends to be GCC
+        +endif()
+        +if(POLICY CMP0054)
+        +    cmake_policy(SET CMP0054 OLD) # Only interpret if() arguments as variables or keywords when unquoted.
+        +endif()
+         
+         find_package(Git QUIET) # if git is found, get build info from git
+        EOF
+        
+        # Add the patch to the portfile
+        sed -i '' '/vcpkg_apply_patches/a\
+        \    PATCHES\
+        \        ${CMAKE_CURRENT_LIST_DIR}/fix-cmake-policies.patch' vcpkg-overlays/x265/portfile.cmake
+        
+        echo "=== Created x265 overlay with CMake policy fix ==="
+        ls -la vcpkg-overlays/x265/
+
     - name: Initialize OpenTimelineIO submodule
       run: |
         git submodule init
@@ -72,8 +111,20 @@ jobs:
 
     - name: Configure with CMake (ARM64)
       run: |
+        # Debug environment
+        echo "=== Environment Debug ==="
+        echo "CMake version: $(cmake --version)"
+        echo "CMake path: $(which cmake)"
+        echo "Qt path: $(pwd)/Qt/${{ env.QT_VERSION }}/macos/lib/cmake/Qt6"
+        echo "VCPKG path: $(pwd)/../vcpkg"
+        
+        # Set environment variables for vcpkg and CMake
+        export VCPKG_ROOT="$(pwd)/../vcpkg"
+        export CMAKE_TOOLCHAIN_FILE="$VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake"
+        export VCPKG_OVERLAY_PORTS="$(pwd)/vcpkg-overlays"
+        
         # Use the MacOSRelease preset for ARM64 (GitHub runners are ARM64)
-        cmake -B build --preset MacOSRelease
+        cmake -B build --preset MacOSRelease -DVCPKG_OVERLAY_PORTS="$(pwd)/vcpkg-overlays"
 
     - name: Build xSTUDIO
       run: |
@@ -132,4 +183,8 @@ jobs:
           build/CMakeFiles/CMakeOutput.log
           build/CMakeFiles/CMakeError.log
           build/vcpkg-bootstrap.log
+          ../vcpkg/buildtrees/x265/config-*.log
+          ../vcpkg/buildtrees/x265/*.log
+          ../vcpkg/buildtrees/*/config-*.log
+          vcpkg-overlays/
         retention-days: 7
