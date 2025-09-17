@@ -276,7 +276,7 @@ jobs:
         # First, let's find where the vcpkg libraries actually are
         echo "=== Searching for vcpkg libraries ==="
         find .. -name "libspdlog*.dylib" -type f 2>/dev/null || echo "No spdlog libraries found"
-        find .. -name "*.dylib" -path "*/vcpkg*" -type f 2>/dev/null | head -10
+        find .. -name "*.dylib" -path "*/vcpkg*" -type f 2>/dev/null | head -10 || echo "No vcpkg dylibs found"
         
         # Check multiple possible vcpkg library locations
         VCPKG_POSSIBLE_DIRS=(
@@ -288,36 +288,58 @@ jobs:
           "vcpkg_installed/arm64-osx/lib"
         )
         
+        FOUND_VCPKG_DIR=""
         for dir in "${VCPKG_POSSIBLE_DIRS[@]}"; do
           if [ -d "$dir" ]; then
             echo "Found vcpkg lib directory: $dir"
             echo "Contents:"
-            ls -la "$dir" | head -10
-            
-            echo "Copying libraries from: $dir"
-            find "$dir" -name "*.dylib" -exec cp -v {} xSTUDIO.app/Contents/Frameworks/ \;
+            ls -la "$dir" | head -10 || echo "Failed to list directory contents"
+            FOUND_VCPKG_DIR="$dir"
             break
           fi
         done
+        
+        if [ -n "$FOUND_VCPKG_DIR" ]; then
+          echo "Copying libraries from: $FOUND_VCPKG_DIR"
+          find "$FOUND_VCPKG_DIR" -name "*.dylib" -type f | while read lib; do
+            echo "Copying: $lib"
+            cp "$lib" xSTUDIO.app/Contents/Frameworks/ || echo "Failed to copy $lib"
+          done
+        else
+          echo "WARNING: No vcpkg library directory found"
+        fi
         
         # Also check for libraries that might be in the build directory itself
         echo "=== Checking build directory for libraries ==="
         find . -name "*.dylib" -type f 2>/dev/null | while read lib; do
           echo "Found library in build: $lib"
-          cp -v "$lib" xSTUDIO.app/Contents/Frameworks/
+          cp "$lib" xSTUDIO.app/Contents/Frameworks/ || echo "Failed to copy $lib"
         done
         
-        # Copy Qt libraries that might be needed
+        # Copy Qt libraries that might be needed (but be selective to avoid huge bundle)
         QT_LIB_DIR="../Qt/${{ env.QT_VERSION }}/macos/lib"
         if [ -d "$QT_LIB_DIR" ]; then
-          echo "Copying essential Qt libraries from: $QT_LIB_DIR"
-          # Only copy Qt libraries that are likely to be needed
-          find "$QT_LIB_DIR" -name "libQt6*.dylib" -exec cp -v {} xSTUDIO.app/Contents/Frameworks/ \;
+          echo "Checking Qt libraries from: $QT_LIB_DIR"
+          # Only copy essential Qt libraries, not all of them
+          QT_ESSENTIAL_LIBS=(
+            "libQt6Core.*.dylib"
+            "libQt6Gui.*.dylib"
+            "libQt6Widgets.*.dylib"
+            "libQt6Network.*.dylib"
+            "libQt6OpenGL.*.dylib"
+          )
+          
+          for pattern in "${QT_ESSENTIAL_LIBS[@]}"; do
+            find "$QT_LIB_DIR" -name "$pattern" -type f | while read lib; do
+              echo "Copying essential Qt lib: $lib"
+              cp "$lib" xSTUDIO.app/Contents/Frameworks/ || echo "Failed to copy $lib"
+            done
+          done
         fi
         
         # List what we copied
         echo "=== Bundled libraries ==="
-        ls -la xSTUDIO.app/Contents/Frameworks/
+        ls -la xSTUDIO.app/Contents/Frameworks/ || echo "Failed to list Frameworks directory"
         
         # Verify we have the required spdlog library
         if [ -f "xSTUDIO.app/Contents/Frameworks/libspdlog.1.15.3.dylib" ]; then
@@ -325,18 +347,23 @@ jobs:
         else
           echo "✗ libspdlog.1.15.3.dylib NOT found in bundle"
           echo "Searching for any spdlog libraries:"
-          find xSTUDIO.app/Contents/Frameworks/ -name "*spdlog*" || echo "No spdlog libraries in bundle"
+          find xSTUDIO.app/Contents/Frameworks/ -name "*spdlog*" 2>/dev/null || echo "No spdlog libraries in bundle"
         fi
         
         # Add rpath to the main executable
         MAIN_EXEC="xSTUDIO.app/Contents/MacOS/xstudio.bin"
         if [ -f "$MAIN_EXEC" ]; then
           echo "=== Adding rpath to main executable ==="
-          install_name_tool -add_rpath "@executable_path/../Frameworks" "$MAIN_EXEC" 2>/dev/null || echo "rpath may already exist"
+          install_name_tool -add_rpath "@executable_path/../Frameworks" "$MAIN_EXEC" 2>/dev/null || echo "rpath may already exist or failed to add"
           
           # Show current rpaths
           echo "Current rpaths:"
           otool -l "$MAIN_EXEC" | grep -A2 LC_RPATH || echo "No rpaths found"
+        else
+          echo "ERROR: Main executable not found: $MAIN_EXEC"
+          echo "Contents of MacOS directory:"
+          ls -la xSTUDIO.app/Contents/MacOS/ || echo "MacOS directory not found"
+          exit 1
         fi
         
         echo "=== Library bundling complete ==="
@@ -423,17 +450,29 @@ jobs:
 
     - name: Upload build logs on failure
       if: failure()
+      run: |
+        # Copy logs to a local directory to avoid relative path issues
+        mkdir -p build-logs
+        
+        # Copy build logs
+        cp build/CMakeFiles/CMakeOutput.log build-logs/ 2>/dev/null || echo "CMakeOutput.log not found"
+        cp build/CMakeFiles/CMakeError.log build-logs/ 2>/dev/null || echo "CMakeError.log not found"
+        cp build/vcpkg-bootstrap.log build-logs/ 2>/dev/null || echo "vcpkg-bootstrap.log not found"
+        
+        # Copy vcpkg logs
+        find .. -path "*/vcpkg/buildtrees/*/config-*.log" -exec cp {} build-logs/ \; 2>/dev/null || echo "No vcpkg config logs found"
+        find .. -path "*/vcpkg/buildtrees/*/*.log" -exec cp {} build-logs/ \; 2>/dev/null || echo "No vcpkg build logs found"
+        
+        # Copy overlay files
+        cp -r vcpkg-overlays build-logs/ 2>/dev/null || echo "No vcpkg overlays found"
+        
+        echo "Collected logs:"
+        ls -la build-logs/
+
+    - name: Upload build logs artifact on failure
+      if: failure()
       uses: actions/upload-artifact@v4
       with:
         name: build-logs-macos
-        path: |
-          build/CMakeFiles/CMakeOutput.log
-          build/CMakeFiles/CMakeError.log
-          build/vcpkg-bootstrap.log
-          ../vcpkg/buildtrees/x265/config-*.log
-          ../vcpkg/buildtrees/x265/*.log
-          ../vcpkg/buildtrees/python3/autoconf-*.log
-          ../vcpkg/buildtrees/python3/*.log
-          ../vcpkg/buildtrees/*/config-*.log
-          vcpkg-overlays/
+        path: build-logs/
         retention-days: 7
