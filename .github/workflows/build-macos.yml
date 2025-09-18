@@ -375,7 +375,7 @@ jobs:
           ../vcpkg/installed
           ../vcpkg/packages
           build/vcpkg_installed
-        key: vcpkg-built-macos-${{ hashFiles('vcpkg.json') }}-${{ hashFiles('../vcpkg/.git/HEAD') }}-v1
+        key: vcpkg-built-macos-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}-v1
         restore-keys: |
           vcpkg-built-macos-${{ hashFiles('vcpkg.json') }}-v1
           vcpkg-built-macos-v1
